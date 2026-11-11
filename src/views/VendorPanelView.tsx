@@ -1,9 +1,30 @@
 import React, { useState, useEffect } from "react";
-import { OrderRecord, MemberUser, MemberStatus } from "../models/types";
+import { OrderRecord, MemberUser, MemberStatus, OrderStatus } from "../models/types";
 import { db, firebase } from "../models/firebaseModel";
 import { authController } from "../controllers/authController";
-import { Link2, Copy, MousePointer, CheckCircle, TrendingUp, DollarSign, Calendar, X, RefreshCw, Sparkles, AlertTriangle, Clock, MessageSquare } from "lucide-react";
-import confetti from "canvas-confetti";
+import { orderController } from "../controllers/orderController";
+import { OrderDetailModalView } from "./OrderDetailModalView";
+import {
+  LayoutDashboard,
+  ShoppingBag,
+  Share2,
+  Copy,
+  Check,
+  TrendingUp,
+  X,
+  RefreshCw,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  AlertOctagon,
+  Search,
+  ExternalLink,
+  Menu,
+  ShieldCheck,
+  MessageSquare,
+  QrCode,
+  DollarSign,
+} from "lucide-react";
 
 interface VendorPanelViewProps {
   isOpen: boolean;
@@ -13,6 +34,8 @@ interface VendorPanelViewProps {
   onLogout: () => void;
 }
 
+type VendorTab = "resumen" | "pedidos" | "herramientas";
+
 export const VendorPanelView: React.FC<VendorPanelViewProps> = ({
   isOpen,
   onClose,
@@ -20,12 +43,22 @@ export const VendorPanelView: React.FC<VendorPanelViewProps> = ({
   vendorEmail,
   onLogout,
 }) => {
+  const [activeTab, setActiveTab] = useState<VendorTab>("resumen");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [clics, setClics] = useState<number>(0);
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedWa, setCopiedWa] = useState(false);
   const [memberData, setMemberData] = useState<MemberUser | null>(null);
+
+  // Filters for orders
+  const [statusFilter, setStatusFilter] = useState<string>("todos");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Order Detail Modal state
+  const [selectedOrder, setSelectedOrder] = useState<OrderRecord | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
 
   const affiliateUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/?ref=${vendorUid}`;
   const rawPhone = memberData?.phone || "";
@@ -42,6 +75,7 @@ export const VendorPanelView: React.FC<VendorPanelViewProps> = ({
   const loadVendorData = async () => {
     setLoading(true);
     try {
+      // 1. Cargar datos del vendedor
       const user = await authController.getSellerById(vendorUid);
       if (user) {
         setMemberData(user);
@@ -68,58 +102,17 @@ export const VendorPanelView: React.FC<VendorPanelViewProps> = ({
         }
       }
 
-      const snap = await db.collection("pedidos").where("vendedorId", "==", vendorUid).get();
-      const list: OrderRecord[] = [];
-      snap.forEach((doc) => {
-        const d = doc.data();
-        list.push({
-          id: doc.id,
-          clienteNombre: d.clienteNombre || "Cliente",
-          clienteCelular: d.clienteCelular || "",
-          departamento: d.departamento || "Bolivia",
-          productos: d.productos || [],
-          total: Number(d.total) || 0,
-          vendedorId: vendorUid,
-          estado: d.estado || "pendiente",
-          fecha: d.fecha ? d.fecha.toDate() : new Date(),
-        });
-      });
+      // 2. Cargar exclusivamente pedidos que correspondan a este vendedor
+      const vendorOrders = await orderController.getOrdersByVendor(vendorUid);
+      setOrders(vendorOrders);
 
-      if (list.length === 0) {
-        setOrders([
-          {
-            id: "ord-ref-1",
-            clienteNombre: "Valeria Roca",
-            clienteCelular: "59178945612",
-            departamento: "Santa Cruz",
-            productos: [
-              { nombre: "Colágeno Marino Hidrolizado", cantidad: 1, precioUnitario: 205 },
-              { nombre: "Fibernat Detox", cantidad: 1, precioUnitario: 95 },
-            ],
-            total: 300,
-            vendedorId: vendorUid,
-            estado: "confirmado",
-            fecha: new Date(),
-          },
-          {
-            id: "ord-ref-2",
-            clienteNombre: "Rodrigo Morales",
-            clienteCelular: "59171239874",
-            departamento: "La Paz",
-            productos: [
-              { nombre: "Coffee Life Premium (Ganoderma + Cordyceps)", cantidad: 1, precioUnitario: 215 },
-            ],
-            total: 215,
-            vendedorId: vendorUid,
-            estado: "pendiente",
-            fecha: new Date(),
-          },
-        ]);
-      } else {
-        setOrders(list);
+      // Si el modal de detalle está abierto, refrescar el seleccionado
+      if (selectedOrder) {
+        const updated = vendorOrders.find((o) => o.id === selectedOrder.id);
+        if (updated) setSelectedOrder(updated);
       }
     } catch (e) {
-      console.warn("Aviso Firestore vendedor:", e);
+      console.warn("Aviso carga datos vendedor:", e);
     } finally {
       setLoading(false);
     }
@@ -139,308 +132,601 @@ export const VendorPanelView: React.FC<VendorPanelViewProps> = ({
     setTimeout(() => setCopiedWa(false), 2500);
   };
 
-  const handleSimulateClick = async () => {
-    if (!isAuthorized) return;
-    setClics((prev) => prev + 1);
-    try {
-      await db.collection("users").doc(vendorUid).set(
-        { clics: firebase.firestore.FieldValue.increment(1) },
-        { merge: true }
-      );
-    } catch (e) {
-      // Ok
-    }
-  };
-
-  const handleConfirmOrder = async (orderId: string) => {
-    try {
-      await db.collection("pedidos").doc(orderId).update({
-        estado: "confirmado",
-      });
-      setOrders((prev) =>
-        prev.map((o) => (o.id === orderId ? { ...o, estado: "confirmado" } : o))
-      );
-      confetti({ particleCount: 100, spread: 70 });
-    } catch (e: any) {
-      alert("Aviso: " + e.message);
-    }
+  const handleOpenOrderDetail = (order: OrderRecord) => {
+    setSelectedOrder(order);
+    setIsDetailModalOpen(true);
   };
 
   if (!isOpen) return null;
 
-  const totalOrders = orders.length;
-  const confirmedSales = orders
-    .filter((o) => o.estado === "confirmado")
-    .reduce((acc, o) => acc + o.total, 0);
-  const conversionRate = clics > 0 ? ((totalOrders / clics) * 100).toFixed(1) : "0";
+  // KPIs
+  const totalOrdersCount = orders.length;
+  const pendingOrders = orders.filter((o) => o.estado === "pendiente");
+  const confirmedOrders = orders.filter((o) => o.estado === "confirmado");
+  const rejectedOrders = orders.filter((o) => o.estado === "rechazado");
+  const cancelledOrders = orders.filter((o) => o.estado === "cancelado");
+
+  const totalSalesBs = confirmedOrders.reduce((acc, o) => acc + o.total, 0);
+  const conversionRate = clics > 0 ? ((totalOrdersCount / clics) * 100).toFixed(1) : "0";
+
+  // Filtered orders list
+  const filteredOrders = orders.filter((o) => {
+    const matchesStatus = statusFilter === "todos" ? true : o.estado === statusFilter;
+    const matchesSearch =
+      searchQuery === "" ||
+      o.clienteNombre.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      o.clienteCelular.includes(searchQuery) ||
+      (o.id && o.id.toLowerCase().includes(searchQuery.toLowerCase()));
+    return matchesStatus && matchesSearch;
+  });
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#082836]/95 backdrop-blur-xl flex flex-col text-white overflow-hidden animate-in fade-in duration-200">
-      <header className="p-4 sm:p-5 border-b border-cyan-800 bg-[#061e29] flex items-center justify-between">
-        <div className="flex items-center gap-3 text-left">
-          <div className="w-10 h-10 rounded-2xl bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center text-cyan-300">
-            <TrendingUp className="w-5 h-5" />
+    <div className="fixed inset-0 z-50 flex bg-slate-900/60 backdrop-blur-xs text-slate-900 overflow-hidden text-left">
+      {/* Sidebar Navigation */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 w-64 bg-slate-900 text-white flex flex-col justify-between transition-transform duration-200 lg:static lg:translate-x-0 ${
+          mobileMenuOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full"
+        }`}
+      >
+        <div>
+          {/* Brand header */}
+          <div className="p-5 border-b border-slate-800 flex items-center justify-between">
+            <div className="space-y-0.5">
+              <div className="text-[11px] font-bold tracking-wider uppercase text-slate-400">
+                TEAM LIFE
+              </div>
+              <h2 className="font-bold text-base text-white">Panel Distribuidor</h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(false)}
+              className="lg:hidden text-slate-400 hover:text-white p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
-          <div>
-            <h2 className="font-display font-black text-lg sm:text-xl text-white">
-              Portal del Distribuidor · Team Life
-            </h2>
-            <div className="flex items-center gap-2 text-xs text-slate-400">
-              <span>{memberData?.nombreCompleto || vendorEmail}</span>
+
+          {/* User Profile info */}
+          <div className="p-4 border-b border-slate-800 bg-slate-950/40">
+            <div className="text-xs font-semibold text-white truncate">
+              {memberData?.nombreCompleto || vendorEmail}
+            </div>
+            <div className="text-[11px] text-slate-400 truncate mt-0.5">{vendorEmail}</div>
+            <div className="mt-2.5 flex items-center gap-2">
               <span
-                className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
                   isAuthorized
-                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
                     : memberStatus === "pendiente"
-                    ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
-                    : "bg-rose-500/20 text-rose-300 border border-rose-500/40"
+                    ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                    : "bg-rose-500/20 text-rose-300 border border-rose-500/30"
                 }`}
               >
                 {memberStatus}
               </span>
+              <span className="text-[10px] text-slate-400">ID: {vendorUid.slice(0, 8)}...</span>
             </div>
           </div>
+
+          {/* Nav Items */}
+          <nav className="p-3 space-y-1 text-xs font-medium">
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab("resumen");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+                activeTab === "resumen"
+                  ? "bg-slate-800 text-white font-semibold"
+                  : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4 text-slate-400" />
+              <span>Resumen de Mis Pedidos</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab("pedidos");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+                activeTab === "pedidos"
+                  ? "bg-slate-800 text-white font-semibold"
+                  : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <ShoppingBag className="w-4 h-4 text-slate-400" />
+                <span>Pedidos Recibidos</span>
+              </div>
+              {pendingOrders.length > 0 && (
+                <span className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 font-bold text-[10px]">
+                  {pendingOrders.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab("herramientas");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+                activeTab === "herramientas"
+                  ? "bg-slate-800 text-white font-semibold"
+                  : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+              }`}
+            >
+              <Share2 className="w-4 h-4 text-slate-400" />
+              <span>Mi Enlace de Afiliado</span>
+            </button>
+          </nav>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={loadVendorData}
-            className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/10 transition-colors cursor-pointer"
-            title="Refrescar métricas"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-          </button>
+        {/* Sidebar Footer */}
+        <div className="p-4 border-t border-slate-800 space-y-2">
           <button
             type="button"
             onClick={onLogout}
-            className="px-3.5 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 text-xs font-bold transition-colors cursor-pointer"
+            className="w-full px-3 py-2 rounded-xl text-xs font-semibold text-rose-300 hover:bg-rose-500/10 transition-colors text-center cursor-pointer"
           >
             Cerrar Sesión
           </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="text-[10px] text-slate-400 text-center">
+            Equipo Vida S.R.L. · Acceso Seguro
+          </div>
         </div>
-      </header>
+      </aside>
 
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 max-w-7xl w-full mx-auto space-y-6">
-        {/* Status Warning Alerts */}
-        {!isAuthorized && (
-          <div
-            className={`p-5 rounded-3xl border flex items-start gap-4 text-left ${
-              memberStatus === "pendiente"
-                ? "bg-amber-500/10 border-amber-500/30 text-amber-200"
-                : "bg-rose-500/10 border-rose-500/30 text-rose-200"
-            }`}
-          >
-            <div className="p-2 rounded-xl bg-white/10 flex-shrink-0 mt-0.5">
-              {memberStatus === "pendiente" ? (
-                <Clock className="w-5 h-5 text-amber-300" />
-              ) : (
-                <AlertTriangle className="w-5 h-5 text-rose-300" />
-              )}
-            </div>
-            <div className="space-y-1">
-              <h4 className="font-bold text-sm text-white">
-                {memberStatus === "pendiente"
-                  ? "Cuenta en Proceso de Autorización"
-                  : `Cuenta en Estado: ${memberStatus.toUpperCase()}`}
-              </h4>
-              <p className="text-xs opacity-90 leading-relaxed">
-                {memberStatus === "pendiente"
-                  ? "Tu registro ha sido enviado exitosamente al Superadministrador para validación oficial. Mientras permanezca en revisión, tus enlaces de ventas directas no derivarán clientes a tu WhatsApp. Recibirás respuesta pronto."
-                  : "Tu cuenta de distribuidor se encuentra temporalmente inactiva o suspendida. Los pedidos y consultas de clientes referidos serán atendidos directamente por la Central Oficial de Team Life."}
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col bg-slate-50 overflow-hidden">
+        {/* Top Navbar */}
+        <header className="h-16 px-4 sm:px-6 bg-white border-b border-slate-200 flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(true)}
+              className="lg:hidden p-2 rounded-lg text-slate-600 hover:bg-slate-100"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div>
+              <h1 className="font-bold text-base sm:text-lg text-slate-900">
+                {activeTab === "resumen" && "Resumen de Rendimiento"}
+                {activeTab === "pedidos" && "Gestión de Pedidos Asignados"}
+                {activeTab === "herramientas" && "Herramientas de Afiliado y Difusión"}
+              </h1>
+              <p className="text-xs text-slate-500 hidden sm:block">
+                Solo puedes gestionar pedidos asociados a tu enlace personal de distribuidor.
               </p>
-              {memberData?.notasAdmin && (
-                <div className="text-[11px] bg-black/30 p-2.5 rounded-xl border border-white/10 mt-2">
-                  <strong>Observación de Administración:</strong> {memberData.notasAdmin}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={loadVendorData}
+              disabled={loading}
+              className="p-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 text-xs font-medium inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Actualizar datos"
+            >
+              <RefreshCw className={`w-4 h-4 text-slate-500 ${loading ? "animate-spin" : ""}`} />
+              <span className="hidden sm:inline">Actualizar</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 text-xs font-medium transition-colors cursor-pointer"
+              title="Cerrar panel"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </header>
+
+        {/* Tab Content Body */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+          
+          {/* TAB 1: RESUMEN GENERAL */}
+          {activeTab === "resumen" && (
+            <div className="space-y-6">
+              {/* Account Status Card if not authorized */}
+              {!isAuthorized && (
+                <div className="p-4 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-xs flex items-start gap-3">
+                  <ShieldCheck className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <div className="font-bold">Cuenta de Distribuidor en Estado: {memberStatus.toUpperCase()}</div>
+                    <p>
+                      Tu cuenta está siendo revisada por la administración central de Equipo Vida S.R.L.
+                      Una vez autorizada, tus comisiones y enlaces se habilitarán automáticamente para coordinar despachos.
+                    </p>
+                  </div>
                 </div>
               )}
-            </div>
-          </div>
-        )}
 
-        {/* Affiliate Link Banner */}
-        <div className="p-6 rounded-3xl bg-gradient-to-r from-[#0b3c4f] via-[#082836] to-[#041a24] border border-cyan-500/30 space-y-4 text-left">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-cyan-300 font-display font-bold text-sm">
-              <Link2 className="w-4 h-4" />
-              <span>Enlaces Oficiales de Atribución Comercial</span>
-            </div>
-            <span className="text-[11px] text-cyan-200 bg-cyan-500/20 px-2.5 py-0.5 rounded-full border border-cyan-500/30">
-              ID: {vendorUid}
-            </span>
-          </div>
+              {/* KPI Cards */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="p-4 rounded-xl border border-slate-200 bg-white shadow-xs space-y-1">
+                  <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">
+                    Total Pedidos
+                  </div>
+                  <div className="text-2xl font-bold text-slate-900">{totalOrdersCount}</div>
+                  <div className="text-xs text-slate-500">Recibidos por tu enlace</div>
+                </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Store Link */}
-            <div className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-2">
-              <label className="text-xs font-semibold text-slate-300 block">
-                1. Enlace a la Vitrina Web con tu Atribución:
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  readOnly
-                  value={affiliateUrl}
-                  className="flex-1 px-3 py-2 bg-black/50 border border-white/10 rounded-xl font-mono text-xs text-cyan-200 select-all"
-                />
-                <button
-                  type="button"
-                  disabled={!isAuthorized}
-                  onClick={handleCopyLink}
-                  className="px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                  <span>{copiedLink ? "¡Copiado!" : "Copiar"}</span>
-                </button>
+                <div className="p-4 rounded-xl border border-slate-200 bg-white shadow-xs space-y-1">
+                  <div className="text-[11px] font-bold text-emerald-700 uppercase tracking-wide">
+                    Pedidos Confirmados
+                  </div>
+                  <div className="text-2xl font-bold text-emerald-700">{confirmedOrders.length}</div>
+                  <div className="text-xs text-emerald-800">Aceptados para despacho</div>
+                </div>
+
+                <div className="p-4 rounded-xl border border-slate-200 bg-white shadow-xs space-y-1">
+                  <div className="text-[11px] font-bold text-amber-700 uppercase tracking-wide">
+                    Pedidos Pendientes
+                  </div>
+                  <div className="text-2xl font-bold text-amber-700">{pendingOrders.length}</div>
+                  <div className="text-xs text-amber-800">Requieren tu revisión</div>
+                </div>
+
+                <div className="p-4 rounded-xl border border-slate-200 bg-white shadow-xs space-y-1">
+                  <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">
+                    Ventas Confirmadas
+                  </div>
+                  <div className="text-2xl font-bold text-slate-900">
+                    Bs {totalSalesBs.toFixed(0)}
+                  </div>
+                  <div className="text-xs text-slate-500">Monto total vendido</div>
+                </div>
+              </div>
+
+              {/* Affiliate quick bar */}
+              <div className="p-5 rounded-xl border border-slate-200 bg-white shadow-xs space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-bold text-sm text-slate-900">Tu Enlace Personal de Distribuidor</h3>
+                    <p className="text-xs text-slate-500">
+                      Comparte este enlace con tus clientes. Todos los pedidos registrados se asignarán a tu cuenta.
+                    </p>
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    Clics registrados: <strong className="text-slate-900">{clics}</strong> · Conversión:{" "}
+                    <strong className="text-slate-900">{conversionRate}%</strong>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={affiliateUrl}
+                    className="flex-1 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-700 font-mono select-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCopyLink}
+                    disabled={!isAuthorized}
+                    className="px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs transition-colors inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedLink ? "Copiado" : "Copiar"}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Recent Orders Preview */}
+              <div className="p-5 rounded-xl border border-slate-200 bg-white shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-sm text-slate-900">Últimos Pedidos Asignados</h3>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("pedidos")}
+                    className="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    Ver todos ({orders.length}) →
+                  </button>
+                </div>
+
+                {orders.length === 0 ? (
+                  <div className="p-8 text-center border border-dashed border-slate-200 rounded-lg text-xs text-slate-500">
+                    Aún no has recibido pedidos con tu enlace de distribuidor.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100 text-xs">
+                    {orders.slice(0, 5).map((order) => (
+                      <div
+                        key={order.id}
+                        className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-slate-50/50 px-2 rounded-lg transition-colors"
+                      >
+                        <div>
+                          <div className="font-semibold text-slate-900">{order.clienteNombre}</div>
+                          <div className="text-slate-500 text-[11px]">
+                            {order.departamento} · Tel: +{order.clienteCelular.replace(/\+/g, "")}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 self-end sm:self-center">
+                          <div className="text-right">
+                            <div className="font-bold text-slate-900 text-sm">
+                              Bs {order.total.toFixed(0)}
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              {new Date(order.fecha).toLocaleDateString("es-BO")}
+                            </div>
+                          </div>
+
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${
+                              order.estado === "confirmado"
+                                ? "bg-emerald-50 text-emerald-800 border border-emerald-300"
+                                : order.estado === "pendiente"
+                                ? "bg-amber-50 text-amber-800 border border-amber-300"
+                                : order.estado === "rechazado"
+                                ? "bg-rose-50 text-rose-800 border border-rose-300"
+                                : "bg-slate-100 text-slate-700 border border-slate-300"
+                            }`}
+                          >
+                            {order.estado}
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={() => handleOpenOrderDetail(order)}
+                            className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 font-medium text-xs transition-colors cursor-pointer"
+                          >
+                            Ver detalle
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
+          )}
 
-            {/* Direct WhatsApp Link */}
-            <div className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-2">
-              <label className="text-xs font-semibold text-slate-300 block">
-                2. Enlace Directo a tu WhatsApp Autorizado:
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  readOnly
-                  value={waUrl || "https://wa.me/591..."}
-                  className="flex-1 px-3 py-2 bg-black/50 border border-white/10 rounded-xl font-mono text-xs text-emerald-300 select-all"
-                />
-                <button
-                  type="button"
-                  disabled={!isAuthorized || !waUrl}
-                  onClick={handleCopyWa}
-                  className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
-                >
-                  <MessageSquare className="w-3.5 h-3.5" />
-                  <span>{copiedWa ? "¡Copiado!" : "Copiar WA"}</span>
-                </button>
-              </div>
-            </div>
-          </div>
+          {/* TAB 2: PEDIDOS RECIBIDOS (LISTA COMPLETA Y GESTIÓN) */}
+          {activeTab === "pedidos" && (
+            <div className="space-y-4">
+              {/* Search and Filters */}
+              <div className="p-4 rounded-xl border border-slate-200 bg-white shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                {/* Search */}
+                <div className="relative flex-1 max-w-md">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Buscar por cliente, celular o ID de pedido..."
+                    className="w-full pl-9 pr-3 py-1.5 rounded-lg border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </div>
 
-          <div className="flex items-center justify-between pt-2">
-            <p className="text-[11px] text-slate-400">
-              Número registrado para despachos: <strong className="text-white">+{rawPhone || "Pendiente"}</strong>
-            </p>
-            {isAuthorized && (
-              <button
-                type="button"
-                onClick={handleSimulateClick}
-                className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-slate-200 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-                title="Simula un clic en tu enlace"
-              >
-                <MousePointer className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Simular Visita</span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Metric Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-          <div className="p-6 rounded-3xl bg-[#0b3c4f]/40 border border-cyan-800 shadow-lg space-y-2 text-left">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <Calendar className="w-4 h-4 text-cyan-400" />
-              <span>Pedidos Recibidos</span>
-            </span>
-            <div className="font-display font-black text-3xl text-cyan-200">{totalOrders}</div>
-          </div>
-
-          <div className="p-6 rounded-3xl bg-[#0b3c4f]/40 border border-cyan-800 shadow-lg space-y-2 text-left">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <DollarSign className="w-4 h-4 text-emerald-400" />
-              <span>Ventas Confirmadas</span>
-            </span>
-            <div className="font-display font-black text-3xl text-emerald-400">
-              Bs {confirmedSales.toFixed(0)}
-            </div>
-          </div>
-
-          <div className="p-6 rounded-3xl bg-[#0b3c4f]/40 border border-cyan-800 shadow-lg space-y-2 text-left">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <MousePointer className="w-4 h-4 text-amber-400" />
-              <span>Clics Registrados</span>
-            </span>
-            <div className="font-display font-black text-3xl text-amber-400">{clics}</div>
-          </div>
-
-          <div className="p-6 rounded-3xl bg-[#0b3c4f]/40 border border-cyan-800 shadow-lg space-y-2 text-left">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 text-cyan-400" />
-              <span>Conversión</span>
-            </span>
-            <div className="font-display font-black text-3xl text-cyan-400">{conversionRate}%</div>
-          </div>
-        </div>
-
-        {/* Orders Table */}
-        <div className="p-6 rounded-3xl bg-[#0b3c4f]/30 border border-cyan-800/80 space-y-4 text-left">
-          <div className="flex items-center justify-between">
-            <h3 className="font-display font-bold text-lg text-white">Órdenes con tu Código</h3>
-            <span className="text-xs text-slate-400">Total: {orders.length}</span>
-          </div>
-
-          <div className="space-y-3">
-            {orders.map((o) => (
-              <div
-                key={o.id}
-                className="p-5 rounded-2xl bg-white/5 border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-              >
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-display font-bold text-base text-white">{o.clienteNombre}</span>
-                    <span
-                      className={`text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full ${
-                        o.estado === "confirmado"
-                          ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-                          : "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                {/* Status Filter Buttons */}
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                  {(["todos", "pendiente", "confirmado", "rechazado", "cancelado"] as const).map((st) => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => setStatusFilter(st)}
+                      className={`px-3 py-1.5 rounded-lg font-medium transition-colors cursor-pointer capitalize ${
+                        statusFilter === st
+                          ? "bg-slate-900 text-white"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                       }`}
                     >
-                      {o.estado}
-                    </span>
+                      {st === "todos" ? "Todos los estados" : st}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Orders Table */}
+              <div className="border border-slate-200 rounded-xl bg-white shadow-xs overflow-hidden">
+                {filteredOrders.length === 0 ? (
+                  <div className="p-12 text-center text-slate-500 text-xs space-y-2">
+                    <ShoppingBag className="w-8 h-8 text-slate-300 mx-auto" />
+                    <div className="font-semibold text-slate-700">No se encontraron pedidos</div>
+                    <p className="text-slate-400 max-w-sm mx-auto">
+                      No hay pedidos asignados a tu cuenta bajo los filtros seleccionados.
+                    </p>
                   </div>
-                  <div className="text-xs text-slate-300">
-                    Celular: <span className="font-mono text-cyan-200">+{o.clienteCelular}</span> · Destino:{" "}
-                    <span className="text-cyan-300">{o.departamento}</span>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
+                        <tr>
+                          <th className="py-3 px-4">ID Pedido</th>
+                          <th className="py-3 px-4">Cliente</th>
+                          <th className="py-3 px-4">Destino</th>
+                          <th className="py-3 px-4">Productos</th>
+                          <th className="py-3 px-4 text-right">Total</th>
+                          <th className="py-3 px-4">Estado Pedido</th>
+                          <th className="py-3 px-4">Pago PagosYa</th>
+                          <th className="py-3 px-4">Fecha</th>
+                          <th className="py-3 px-4 text-right">Acción</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredOrders.map((order) => (
+                          <tr key={order.id} className="hover:bg-slate-50/70 transition-colors">
+                            <td className="py-3 px-4 font-mono font-bold text-slate-900">
+                              #{order.id?.slice(-6) || "ORD"}
+                            </td>
+                            <td className="py-3 px-4">
+                              <div className="font-semibold text-slate-900">{order.clienteNombre}</div>
+                              <div className="text-[11px] text-slate-500">
+                                +{order.clienteCelular.replace(/\+/g, "")}
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 text-slate-600">
+                              {order.departamento}
+                            </td>
+                            <td className="py-3 px-4 text-slate-600 max-w-[200px] truncate" title={order.productos?.map((p) => `${p.nombre} (x${p.cantidad})`).join(", ")}>
+                              {order.productos?.map((p) => `${p.nombre} (x${p.cantidad})`).join(", ") || "—"}
+                            </td>
+                            <td className="py-3 px-4 text-right font-bold text-slate-900 text-sm">
+                              Bs {order.total.toFixed(0)}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span
+                                className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold capitalize ${
+                                  order.estado === "confirmado"
+                                    ? "bg-emerald-50 text-emerald-800 border border-emerald-300"
+                                    : order.estado === "pendiente"
+                                    ? "bg-amber-50 text-amber-800 border border-amber-300"
+                                    : order.estado === "rechazado"
+                                    ? "bg-rose-50 text-rose-800 border border-rose-300"
+                                    : "bg-slate-100 text-slate-700 border border-slate-300"
+                                }`}
+                              >
+                                {order.estado}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              {order.pagoPagosya ? (
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                    order.pagoPagosya.estado === "completed"
+                                      ? "bg-emerald-100 text-emerald-800"
+                                      : order.pagoPagosya.estado === "expired"
+                                      ? "bg-slate-100 text-slate-600"
+                                      : "bg-amber-100 text-amber-800"
+                                  }`}
+                                >
+                                  {order.pagoPagosya.estado === "completed" ? "Pagado (QR)" : "Pendiente QR"}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 text-[11px]">—</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-slate-500 text-[11px]">
+                              {new Date(order.fecha).toLocaleDateString("es-BO")}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenOrderDetail(order)}
+                                className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-800 font-semibold text-xs transition-colors cursor-pointer"
+                              >
+                                Gestionar
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                  <div className="text-xs text-slate-400">
-                    Items: {o.productos?.map((p) => `${p.nombre} (x${p.cantidad})`).join(", ")}
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: HERRAMIENTAS DE AFILIADO */}
+          {activeTab === "herramientas" && (
+            <div className="space-y-6 max-w-3xl">
+              <div className="p-6 rounded-xl border border-slate-200 bg-white shadow-xs space-y-4">
+                <div className="space-y-1">
+                  <h3 className="font-bold text-base text-slate-900">Enlace Personal de Vendedor</h3>
+                  <p className="text-xs text-slate-600">
+                    Cualquier cliente que visite TEAM LIFE a través de tu enlace quedará vinculado contigo durante su compra.
+                  </p>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex items-center justify-between gap-3">
+                  <code className="text-xs font-mono text-slate-800 select-all truncate">
+                    {affiliateUrl}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={handleCopyLink}
+                    disabled={!isAuthorized}
+                    className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs transition-colors inline-flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-50"
+                  >
+                    {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedLink ? "Copiado" : "Copiar"}</span>
+                  </button>
+                </div>
+
+                {waUrl && (
+                  <div className="pt-2">
+                    <a
+                      href={`https://wa.me/?text=${encodeURIComponent(
+                        `Hola, te invito a conocer los productos oficiales de nutrición celular de TEAM LIFE | Equipo Vida S.R.L.: ${affiliateUrl}`
+                      )}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs transition-colors inline-flex items-center gap-2 cursor-pointer shadow-xs"
+                    >
+                      <Share2 className="w-4 h-4" />
+                      <span>Compartir por WhatsApp con Contactos</span>
+                    </a>
+                  </div>
+                )}
+              </div>
+
+              {/* Account summary & notes from admin */}
+              <div className="p-6 rounded-xl border border-slate-200 bg-white shadow-xs space-y-3">
+                <h3 className="font-bold text-base text-slate-900">Datos de tu Cuenta Oficial</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                  <div className="space-y-1">
+                    <span className="text-slate-500">Nombre Completo:</span>
+                    <div className="font-semibold text-slate-900">{memberData?.nombreCompleto}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-slate-500">Celular de Contacto:</span>
+                    <div className="font-semibold text-slate-900">+{memberData?.phone}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-slate-500">Estado de Aprobación:</span>
+                    <div className="font-semibold text-slate-900 capitalize">{memberStatus}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-slate-500">Fecha de Registro:</span>
+                    <div className="font-semibold text-slate-900">
+                      {memberData?.fechaRegistro
+                        ? new Date(memberData.fechaRegistro).toLocaleDateString("es-BO")
+                        : "Reciente"}
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-4 self-end sm:self-center">
-                  <div className="text-right">
-                    <div className="text-[10px] text-slate-400 uppercase">Monto</div>
-                    <div className="font-display font-black text-xl text-cyan-300">Bs {o.total.toFixed(0)}</div>
+                {memberData?.notasAdmin && (
+                  <div className="mt-4 p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-700">
+                    <span className="font-bold text-slate-900">Notas de la Administración:</span>{" "}
+                    {memberData.notasAdmin}
                   </div>
-                  {o.estado !== "confirmado" ? (
-                    <button
-                      type="button"
-                      onClick={() => handleConfirmOrder(o.id!)}
-                      className="px-4 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 text-xs font-bold transition-colors cursor-pointer"
-                    >
-                      Confirmar Venta
-                    </button>
-                  ) : (
-                    <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
-                      <CheckCircle className="w-4 h-4" /> Aprobado
-                    </span>
-                  )}
-                </div>
+                )}
               </div>
-            ))}
-          </div>
+            </div>
+          )}
         </div>
-      </div>
+      </main>
+
+      {/* Reusable Order Detail Modal */}
+      {selectedOrder && (
+        <OrderDetailModalView
+          isOpen={isDetailModalOpen}
+          order={selectedOrder}
+          onClose={() => {
+            setIsDetailModalOpen(false);
+            setSelectedOrder(null);
+          }}
+          currentUser={{
+            uid: vendorUid,
+            nombre: memberData?.nombreCompleto || vendorEmail,
+            email: vendorEmail,
+            role: "vendedor",
+          }}
+          onOrderUpdated={loadVendorData}
+        />
+      )}
     </div>
   );
 };

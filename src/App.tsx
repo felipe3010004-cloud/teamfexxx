@@ -525,6 +525,7 @@ export default function App() {
         products={products}
         onRefreshProducts={handleRefreshProducts}
         onLogout={handleLogout}
+        currentUser={currentUser}
       />
       {/* Floating Mobile Cart Pill */}
       {cartCount > 0 && !isCartOpen && !isAiOpen && (

@@ -1,4 +1,4 @@
-import { createPagosyaSandboxCheckout } from "../../server/pagosyaService.ts";
+import { createPagosyaCheckout } from "../../server/pagosyaService.ts";
 
 export const handler = async (event: any) => {
   const headers = {
@@ -41,7 +41,7 @@ export const handler = async (event: any) => {
     const protocol = event.headers?.["x-forwarded-proto"] || "https";
     const origin = host ? `${protocol}://${host}` : undefined;
 
-    const result = await createPagosyaSandboxCheckout(payload, origin);
+    const result = await createPagosyaCheckout(payload, origin);
 
     return {
       statusCode: result.statusCode,

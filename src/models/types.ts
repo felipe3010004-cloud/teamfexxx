@@ -62,18 +62,53 @@ export interface OrderItemRecord {
   isCombo?: boolean;
 }
 
+export type OrderStatus = "pendiente" | "confirmado" | "rechazado" | "cancelado" | "entregado";
+
+export interface OrderStateHistoryItem {
+  id?: string;
+  estadoAnterior: OrderStatus;
+  estadoNuevo: OrderStatus;
+  usuarioId: string;
+  usuarioNombre: string;
+  usuarioEmail: string;
+  usuarioRol: "admin" | "vendedor";
+  fecha: any;
+  motivo?: string;
+}
+
 export interface OrderRecord {
   id?: string;
   clienteNombre: string;
   clienteCelular: string;
   departamento: string;
   pais?: string;
-  productos?: { nombre: string; cantidad: number; precioUnitario: number }[];
+  productos?: { nombre: string; cantidad: number; precioUnitario: number; isCombo?: boolean }[];
   items?: OrderItemRecord[];
   total: number;
   vendedorId?: string | null;
-  estado: "pendiente" | "confirmado" | "entregado";
+  vendedorNombre?: string | null;
+  estado: OrderStatus;
   fecha: any;
+  historialEstados?: OrderStateHistoryItem[];
+  ultimoMotivo?: string;
+  motivoRechazo?: string;
+  motivoCancelacion?: string;
+  actualizadoPor?: {
+    uid: string;
+    nombre: string;
+    email: string;
+    rol: "admin" | "vendedor";
+  };
+  fechaActualizacion?: any;
+  pagoPagosya?: {
+    checkoutId?: string;
+    estado: PagosyaStatus;
+    monto?: number;
+    ambiente?: PagosyaEnvironment;
+    qrImageUrl?: string;
+    fechaPago?: any;
+    verificadoPorApi?: boolean;
+  };
 }
 
 export interface VideoItem {
@@ -155,10 +190,12 @@ export interface AuditLogItem {
 }
 
 // ==========================================
-// PAGOSYA SANDBOX & CHECKOUT TYPES
+// PAGOSYA MULTI-ENVIRONMENT & CHECKOUT TYPES
 // ==========================================
 
-export type PagosyaStatus = "pending" | "completed" | "cancelled" | "expired" | string;
+export type PagosyaEnvironment = "sandbox" | "production";
+
+export type PagosyaStatus = "pending" | "completed" | "cancelled" | "expired" | "failed" | string;
 
 export interface PagosyaQrDetails {
   data_url?: string;
@@ -177,9 +214,40 @@ export interface PagosyaQrResponse {
   embedded_enabled?: boolean;
   qr?: PagosyaQrDetails;
   expires_at?: string;
-  environment?: string;
+  environment?: PagosyaEnvironment;
   warning?: string;
   checkout_url?: string;
+  status_url?: string;
+  completed_at?: string;
+}
+
+export interface PagosyaCheckoutRecord {
+  id?: string;
+  orderId: string;
+  checkoutId: string;
+  monto: number;
+  moneda: string;
+  cliente?: {
+    name?: string;
+    email?: string;
+    phone?: string;
+  };
+  items?: {
+    id: string;
+    nombre: string;
+    cantidad: number;
+    precio: number;
+    isCombo: boolean;
+  }[];
+  estado: PagosyaStatus;
+  livemode: boolean;
+  ambiente: PagosyaEnvironment;
+  fechaCreacion?: any;
+  expiraEn?: any;
+  fechaConfirmacion?: any;
+  qrImageUrl?: string;
+  checkoutUrl?: string;
+  statusUrl?: string;
 }
 
 export interface PagosyaCreateCheckoutPayload {

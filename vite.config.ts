@@ -3,7 +3,12 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig, Plugin } from 'vite';
 import { generateGroundedChatResponse } from './server/aiService.ts';
-import { createPagosyaSandboxCheckout } from './server/pagosyaService.ts';
+import {
+  createPagosyaCheckout,
+  getPagosyaCheckoutStatus,
+  verifyPagosyaWebhookSignature,
+  processPagosyaWebhookEvent,
+} from './server/pagosyaService.ts';
 
 function apiPlugin(): Plugin {
   return {
@@ -13,10 +18,15 @@ function apiPlugin(): Plugin {
         const cleanUrl = req.url ? req.url.split('?')[0].replace(/\/+$/, '') : '';
 
         // CORS headers
-        if (cleanUrl === '/api/ai/chat' || cleanUrl === '/api/pagosya/create-checkout' || cleanUrl === '/.netlify/functions/pagosya-create-checkout') {
+        const isPagosyaRoute =
+          cleanUrl.startsWith('/api/pagosya/') ||
+          cleanUrl.startsWith('/.netlify/functions/pagosya-') ||
+          cleanUrl === '/api/ai/chat';
+
+        if (isPagosyaRoute) {
           res.setHeader('Access-Control-Allow-Origin', '*');
-          res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-          res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+          res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+          res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-PagosYa-Signature');
 
           if (req.method === 'OPTIONS') {
             res.statusCode = 204;
@@ -63,7 +73,7 @@ function apiPlugin(): Plugin {
                 const parsed = JSON.parse(body || '{}');
                 const host = req.headers['host'];
                 const origin = host ? `http://${host}` : undefined;
-                const result = await createPagosyaSandboxCheckout(parsed, origin);
+                const result = await createPagosyaCheckout(parsed, origin);
                 res.setHeader('Content-Type', 'application/json');
                 res.statusCode = result.statusCode;
                 res.end(JSON.stringify(result.success ? result.data : { error: result.error, detail: result.detail }));
@@ -75,6 +85,62 @@ function apiPlugin(): Plugin {
                   error: 'Error interno en el servidor dev al generar checkout de PagosYa.',
                   detail: err?.message || String(err)
                 }));
+              }
+            });
+            return;
+          }
+        }
+
+        if (cleanUrl === '/api/pagosya/checkout-status' || cleanUrl === '/.netlify/functions/pagosya-checkout-status') {
+          const urlObj = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+          const checkoutId = urlObj.searchParams.get('checkout_id') || urlObj.searchParams.get('checkoutId') || '';
+          const statusUrl = urlObj.searchParams.get('status_url') || urlObj.searchParams.get('statusUrl') || '';
+
+          try {
+            const result = await getPagosyaCheckoutStatus(checkoutId, statusUrl);
+            res.setHeader('Content-Type', 'application/json');
+            res.statusCode = result.statusCode;
+            res.end(JSON.stringify(result.success ? result.data : { error: result.error, detail: result.detail }));
+          } catch (err: any) {
+            console.error('[Vite PagosYa Status Error]:', err);
+            res.setHeader('Content-Type', 'application/json');
+            res.statusCode = 500;
+            res.end(JSON.stringify({
+              error: 'Error interno al consultar estado del checkout.',
+              detail: err?.message || String(err),
+            }));
+          }
+          return;
+        }
+
+        if (cleanUrl === '/api/pagosya/webhook' || cleanUrl === '/.netlify/functions/pagosya-webhook') {
+          if (req.method === 'POST') {
+            let rawBody = '';
+            req.on('data', (chunk) => {
+              rawBody += chunk;
+            });
+            req.on('end', async () => {
+              try {
+                const signature = (req.headers['x-pagosya-signature'] || req.headers['X-PagosYa-Signature']) as string;
+                if (process.env.PAGOSYA_WEBHOOK_SECRET) {
+                  const isValid = verifyPagosyaWebhookSignature(rawBody, signature);
+                  if (!isValid) {
+                    res.setHeader('Content-Type', 'application/json');
+                    res.statusCode = 401;
+                    res.end(JSON.stringify({ error: 'Firma inválida (X-PagosYa-Signature).' }));
+                    return;
+                  }
+                }
+
+                const payload = JSON.parse(rawBody || '{}');
+                const result = processPagosyaWebhookEvent(payload);
+                res.setHeader('Content-Type', 'application/json');
+                res.statusCode = 200;
+                res.end(JSON.stringify(result.success ? { received: true, ...result } : { success: false, message: result.error }));
+              } catch (err: any) {
+                res.setHeader('Content-Type', 'application/json');
+                res.statusCode = 400;
+                res.end(JSON.stringify({ error: 'Payload de webhook inválido.', detail: err?.message || String(err) }));
               }
             });
             return;
